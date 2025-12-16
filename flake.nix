@@ -1,0 +1,126 @@
+{
+  description = "ndownload - Automatic video downloader for Twitch and YouTube channels";
+
+  inputs = {
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
+    flake-utils.url = "github:numtide/flake-utils";
+    crane.url = "github:ipetkov/crane";
+    rust-overlay.url = "github:oxalica/rust-overlay";
+  };
+
+  outputs = {
+    self,
+    nixpkgs,
+    flake-utils,
+    crane,
+    rust-overlay,
+    ...
+  }:
+    flake-utils.lib.eachDefaultSystem (
+      system: let
+        # Overlays and package set
+        overlays = [(import rust-overlay)];
+        pkgs = import nixpkgs {inherit system overlays;};
+
+        # Rust toolchain configuration
+        rustToolchain = pkgs.rust-bin.stable."1.88.0".default.override {
+          extensions = ["rust-src"];
+        };
+
+        craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+
+        unfilteredRoot = ./.;
+        src = pkgs.lib.fileset.toSource {
+          root = unfilteredRoot;
+          fileset = pkgs.lib.fileset.unions [
+            (craneLib.fileset.commonCargoSources unfilteredRoot)
+            (pkgs.lib.fileset.fileFilter (
+                file:
+                  pkgs.lib.any file.hasExt [
+                    "svg"
+                  ]
+              )
+              unfilteredRoot)
+            (pkgs.lib.fileset.maybeMissing ./assets)
+          ];
+        };
+
+        # Dependencies for building the application
+        buildInputs = with pkgs; [
+          openssl
+          sqlite
+          yt-dlp
+        ];
+
+        # Dependencies needed only at runtime
+        runtimeDependencies = with pkgs; [
+          yt-dlp
+        ];
+
+        nativeBuildInputs = with pkgs; [
+          pkg-config
+          makeWrapper
+          autoPatchelfHook
+        ];
+
+        envVars = {
+          RUST_BACKTRACE = "full";
+        };
+
+        # Build artifacts
+        cargoArtifacts = craneLib.buildDepsOnly {
+          inherit src buildInputs nativeBuildInputs;
+          env = envVars;
+        };
+
+        # Application package definition
+        ndownload = craneLib.buildPackage {
+          inherit src cargoArtifacts buildInputs nativeBuildInputs runtimeDependencies;
+          env = envVars;
+          pname = "ndownload";
+          version = "0.1.0";
+        };
+
+        # Development shell tools
+        devTools = with pkgs; [
+          rust-analyzer
+          rustToolchain
+          cargo-watch
+          cargo-edit
+          bacon
+        ];
+      in {
+        packages = {
+          default = ndownload;
+          inherit ndownload;
+        };
+
+        checks = {
+          inherit ndownload;
+
+          ndownload-clippy = craneLib.cargoClippy {
+            inherit src cargoArtifacts buildInputs nativeBuildInputs;
+            env = envVars;
+            cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+          };
+
+          ndownload-fmt = craneLib.cargoFmt {inherit src;};
+        };
+
+        devShells.default = pkgs.mkShell {
+          inputsFrom = [ndownload];
+          nativeBuildInputs = devTools;
+          env = envVars;
+
+          LD_LIBRARY_PATH = pkgs.lib.makeLibraryPath (buildInputs ++ runtimeDependencies);
+
+          shellHook = ''
+            echo "[🦀 Rust $(rustc --version)] - Ready to develop ndownload!"
+            echo "yt-dlp: $(yt-dlp --version)"
+          '';
+        };
+
+        formatter = pkgs.alejandra;
+      }
+    );
+}
