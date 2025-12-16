@@ -4,7 +4,9 @@ use gpui::*;
 mod config;
 mod database;
 mod downloader;
+mod downloader_queue;
 mod platforms;
+mod scanner;
 mod ui;
 
 use ui::NDownloadApp;

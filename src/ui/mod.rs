@@ -1,4 +1,7 @@
 use gpui::*;
+use std::sync::Arc;
+use crate::scanner::VideoScanner;
+use crate::downloader_queue::DownloadQueue;
 
 mod text_input;
 use text_input::TextInputView;
@@ -8,6 +11,9 @@ pub struct NDownloadApp {
     channels: Vec<Channel>,
     selected_channel: Option<usize>,
     videos: Vec<VideoInfo>,
+    scanner: Arc<VideoScanner>,
+    download_queue: Arc<DownloadQueue>,
+    loading: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -88,6 +94,9 @@ impl NDownloadApp {
             channels: Vec::new(),
             selected_channel: None,
             videos: Vec::new(),
+            scanner: Arc::new(VideoScanner::new()),
+            download_queue: Arc::new(DownloadQueue::new(cx)),
+            loading: false,
         }
     }
 
@@ -115,33 +124,50 @@ impl NDownloadApp {
         }
     }
 
-    fn select_channel(&mut self, index: usize, _cx: &mut Context<Self>) {
+    fn select_channel(&mut self, index: usize, window: &mut Window, cx: &mut Context<Self>) {
         self.selected_channel = Some(index);
-        // Pour l'instant, on crée des vidéos de test
-        // TODO: Scanner les vraies vidéos avec yt-dlp
-        self.videos = vec![
-            VideoInfo {
-                id: "vid1".to_string(),
-                title: "Vidéo de test 1".to_string(),
-                url: "https://example.com/1".to_string(),
-                upload_date: Some("2024-01-15".to_string()),
-                downloaded: false,
-            },
-            VideoInfo {
-                id: "vid2".to_string(),
-                title: "Vidéo de test 2".to_string(),
-                url: "https://example.com/2".to_string(),
-                upload_date: Some("2024-01-14".to_string()),
-                downloaded: true,
-            },
-            VideoInfo {
-                id: "vid3".to_string(),
-                title: "Vidéo de test 3".to_string(),
-                url: "https://example.com/3".to_string(),
-                upload_date: Some("2024-01-13".to_string()),
-                downloaded: false,
-            },
-        ];
+        self.loading = true;
+        self.videos.clear();
+        cx.notify();
+
+        let channel_url = self.channels[index].url.clone();
+        let channel_name = self.channels[index].name.clone();
+        let scanner = self.scanner.clone();
+
+        // Scanner les vidéos en async
+        cx.spawn_in(window, async move |this, cx| {
+            match scanner.scan_channel_videos(&channel_url).await {
+                Ok(metadata_videos) => {
+                    let videos: Vec<VideoInfo> = metadata_videos
+                        .into_iter()
+                        .map(|meta| {
+                            let downloaded_path = scanner.is_video_downloaded(&channel_name, meta.duration);
+                            VideoInfo {
+                                id: meta.id,
+                                title: meta.title,
+                                url: meta.url,
+                                upload_date: meta.upload_date,
+                                downloaded: downloaded_path.is_some(),
+                            }
+                        })
+                        .collect();
+
+                    let _ = this.update(cx, |this, cx| {
+                        this.videos = videos;
+                        this.loading = false;
+                        cx.notify();
+                    });
+                }
+                Err(e) => {
+                    tracing::error!("Erreur scan vidéos: {}", e);
+                    let _ = this.update(cx, |this, cx| {
+                        this.loading = false;
+                        cx.notify();
+                    });
+                }
+            }
+        })
+        .detach();
     }
 
     fn go_back(&mut self, _cx: &mut Context<Self>) {
@@ -306,8 +332,8 @@ impl Render for NDownloadApp {
                                         .rounded_md()
                                         .cursor_pointer()
                                         .hover(|style| style.bg(rgb(0x4d4d4d)))
-                                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _event, _window, cx| {
-                                            this.select_channel(index, cx);
+                                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _event, window, cx| {
+                                            this.select_channel(index, window, cx);
                                             cx.notify();
                                         }))
                                         .child(
@@ -430,7 +456,17 @@ impl NDownloadApp {
                             .child(format!("Vidéos disponibles ({})", self.videos.len()))
                     )
                     .child(
-                        if self.videos.is_empty() {
+                        if self.loading {
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .h_full()
+                                .text_color(rgb(0x0d96f2))
+                                .text_size(px(14.0))
+                                .child("Chargement des vidéos...")
+                                .into_any_element()
+                        } else if self.videos.is_empty() {
                             div()
                                 .flex()
                                 .items_center()
