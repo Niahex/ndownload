@@ -275,6 +275,9 @@ impl NDownloadApp {
         if index < self.channels.len() {
             self.channels.remove(index);
             
+            // Sauvegarder les changements
+            save_channels(&self.channels);
+            
             // Si on était sur cette chaîne, revenir à la liste
             if self.selected_channel == Some(index) {
                 self.selected_channel = None;
@@ -585,6 +588,7 @@ impl NDownloadApp {
                     .p_4()
                     .bg(rgb(NORD1))
                     .rounded_md()
+                    .overflow_hidden()
                     .child(
                         div()
                             .text_color(rgb(NORD6))
@@ -610,6 +614,7 @@ impl NDownloadApp {
                                 .flex()
                                 .flex_col()
                                 .gap_2()
+                                .size_full()
                                 .overflow_y_scroll()
                                 .children(self.channels.iter().enumerate().map(|(index, channel)| {
                                     div()
@@ -617,14 +622,14 @@ impl NDownloadApp {
                                         .p_3()
                                         .bg(rgb(NORD2))
                                         .rounded_md()
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(rgb(NORD3)))
+                                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _event, window, cx| {
+                                            this.select_channel(index, window, cx);
+                                        }))
                                         .child(
                                             div()
                                                 .flex_1()
-                                                .cursor_pointer()
-                                                .hover(|style| style.bg(rgb(NORD3)))
-                                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _event, window, cx| {
-                                                    this.select_channel(index, window, cx);
-                                                }))
                                                 .child(ChannelItem::new(channel.clone()))
                                         )
                                         .child(
@@ -637,6 +642,7 @@ impl NDownloadApp {
                                                 .hover(|style| style.bg(rgb(0x8f4149)))
                                                 .on_mouse_down(MouseButton::Left, cx.listener(move |this, _event, _window, cx| {
                                                     this.delete_channel(index, cx);
+                                                    cx.stop_propagation();
                                                 }))
                                                 .child(
                                                     div()
@@ -737,6 +743,7 @@ impl NDownloadApp {
                     .p_4()
                     .bg(rgb(NORD1))
                     .rounded_md()
+                    .overflow_hidden()
                     .child(
                         div()
                             .text_color(rgb(NORD6))
@@ -772,6 +779,7 @@ impl NDownloadApp {
                                 .flex()
                                 .flex_col()
                                 .gap_2()
+                                .size_full()
                                 .overflow_y_scroll()
                                 .children(self.videos.iter().enumerate().map(|(_idx, video)| {
                                     let video_url = video.url.clone();
