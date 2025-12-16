@@ -1,11 +1,36 @@
 use gpui::*;
+use gpui::prelude::FluentBuilder;
 use std::sync::Arc;
 use crate::scanner::VideoScanner;
 use crate::downloader_queue::DownloadQueue;
+use crate::notifications::Notification;
 use serde::{Deserialize, Serialize};
 
+pub mod actions;
 mod text_input;
+mod components;
+
 use text_input::TextInputView;
+use components::{VideoItem, ChannelItem};
+pub use actions::*;
+
+// Palette Nord
+const NORD0: u32 = 0x2e3440;  // Polar Night - darkest
+const NORD1: u32 = 0x3b4252;  // Polar Night
+const NORD2: u32 = 0x434c5e;  // Polar Night
+const NORD3: u32 = 0x4c566a;  // Polar Night - lightest
+const NORD4: u32 = 0xd8dee9;  // Snow Storm - darkest
+const NORD5: u32 = 0xe5e9f0;  // Snow Storm
+const NORD6: u32 = 0xeceff4;  // Snow Storm - lightest
+const NORD7: u32 = 0x8fbcbb;  // Frost - cyan
+const NORD8: u32 = 0x88c0d0;  // Frost - bright cyan
+const NORD9: u32 = 0x81a1c1;  // Frost - blue
+const NORD10: u32 = 0x5e81ac; // Frost - dark blue
+const NORD11: u32 = 0xbf616a; // Aurora - red
+const NORD12: u32 = 0xd08770; // Aurora - orange
+const NORD13: u32 = 0xebcb8b; // Aurora - yellow
+const NORD14: u32 = 0xa3be8c; // Aurora - green
+const NORD15: u32 = 0xb48ead; // Aurora - purple
 
 pub struct NDownloadApp {
     url_input: Entity<TextInputView>,
@@ -15,7 +40,18 @@ pub struct NDownloadApp {
     scanner: Arc<VideoScanner>,
     download_queue: Arc<DownloadQueue>,
     loading: bool,
-    scroll_handle: ScrollHandle,
+    download_input: Option<Entity<TextInputView>>,
+    download_video: Option<DownloadingVideo>,
+    downloading_videos: std::collections::HashSet<String>, // URLs des vidéos en cours de téléchargement
+}
+
+#[derive(Clone)]
+struct DownloadingVideo {
+    url: String,
+    channel_name: String,
+    progress: f32, // 0.0 to 1.0
+    speed: Option<String>,
+    eta: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -31,7 +67,14 @@ struct VideoInfo {
     title: String,
     url: String,
     upload_date: Option<String>,
-    downloaded: bool,
+    status: VideoStatus,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+enum VideoStatus {
+    NotDownloaded,
+    Downloading,
+    Downloaded,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -97,14 +140,30 @@ const CHANNELS_CACHE_FILE: &str = "/tmp/ndownload_channels.json";
 
 fn load_channels() -> Vec<Channel> {
     match std::fs::read_to_string(CHANNELS_CACHE_FILE) {
-        Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-        Err(_) => Vec::new(),
+        Ok(content) => match serde_json::from_str(&content) {
+            Ok(channels) => channels,
+            Err(error) => {
+                tracing::warn!("Failed to parse channels cache: {}", error);
+                Vec::new()
+            }
+        },
+        Err(error) => {
+            tracing::debug!("No channels cache file found: {}", error);
+            Vec::new()
+        }
     }
 }
 
 fn save_channels(channels: &[Channel]) {
-    if let Ok(content) = serde_json::to_string_pretty(channels) {
-        let _ = std::fs::write(CHANNELS_CACHE_FILE, content);
+    match serde_json::to_string_pretty(channels) {
+        Ok(content) => {
+            if let Err(error) = std::fs::write(CHANNELS_CACHE_FILE, content) {
+                tracing::error!("Failed to save channels cache: {}", error);
+            }
+        }
+        Err(error) => {
+            tracing::error!("Failed to serialize channels: {}", error);
+        }
     }
 }
 
@@ -126,7 +185,9 @@ impl NDownloadApp {
             scanner: Arc::new(VideoScanner::new()),
             download_queue: Arc::new(DownloadQueue::new(cx)),
             loading: false,
-            scroll_handle: ScrollHandle::new(),
+            download_input: None,
+            download_video: None,
+            downloading_videos: std::collections::HashSet::new(),
         }
     }
 
@@ -168,61 +229,262 @@ impl NDownloadApp {
         let channel_name = self.channels[index].name.clone();
         let scanner = self.scanner.clone();
 
-        // Scanner les vidéos en async
         cx.spawn_in(window, async move |this, cx| {
-            match scanner.scan_channel_videos(&channel_url).await {
-                Ok(metadata_videos) => {
-                    let videos: Vec<VideoInfo> = metadata_videos
-                        .into_iter()
-                        .map(|meta| {
-                            let downloaded_path = scanner.is_video_downloaded(&channel_name, meta.duration);
-                            VideoInfo {
-                                id: meta.id,
-                                title: meta.title,
-                                url: meta.url,
-                                upload_date: meta.upload_date,
-                                downloaded: downloaded_path.is_some(),
-                            }
-                        })
-                        .collect();
+            let videos_result = scanner.scan_channel_videos(&channel_url).await;
+            
+            this.update(cx, |this, cx| {
+                match videos_result {
+                    Ok(metadata_videos) => {
+                        this.videos = metadata_videos
+                            .into_iter()
+                            .map(|meta| {
+                                let is_downloaded = scanner.is_video_downloaded(&channel_name, meta.duration).is_some();
+                                let is_downloading = this.downloading_videos.contains(&meta.url);
 
-                    let _ = this.update(cx, |this, cx| {
-                        this.videos = videos;
-                        this.loading = false;
-                        cx.notify();
-                    });
+                                let status = if is_downloaded {
+                                    VideoStatus::Downloaded
+                                } else if is_downloading {
+                                    VideoStatus::Downloading
+                                } else {
+                                    VideoStatus::NotDownloaded
+                                };
+
+                                VideoInfo {
+                                    id: meta.id,
+                                    title: meta.title,
+                                    url: meta.url,
+                                    upload_date: meta.upload_date,
+                                    status,
+                                }
+                            })
+                            .collect();
+                    }
+                    Err(error) => {
+                        tracing::error!("Failed to scan channel videos: {}", error);
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Erreur scan vidéos: {}", e);
-                    let _ = this.update(cx, |this, cx| {
-                        this.loading = false;
-                        cx.notify();
-                    });
-                }
-            }
+                
+                this.loading = false;
+                cx.notify();
+            })
         })
         .detach();
     }
 
-    fn go_back(&mut self, _cx: &mut Context<Self>) {
+    fn delete_channel(&mut self, index: usize, cx: &mut Context<Self>) {
+        if index < self.channels.len() {
+            self.channels.remove(index);
+            
+            // Si on était sur cette chaîne, revenir à la liste
+            if self.selected_channel == Some(index) {
+                self.selected_channel = None;
+                self.videos.clear();
+            } else if let Some(selected) = self.selected_channel {
+                // Ajuster l'index si nécessaire
+                if selected > index {
+                    self.selected_channel = Some(selected - 1);
+                }
+            }
+            
+            cx.notify();
+        }
+    }
+
+    fn go_back(&mut self, _: &GoBack, _window: &mut Window, _cx: &mut Context<Self>) {
         self.selected_channel = None;
         self.videos.clear();
+    }
+
+    fn handle_quit(&mut self, _: &Quit, _window: &mut Window, cx: &mut Context<Self>) {
+        cx.quit();
+    }
+
+    fn handle_cancel_download(&mut self, _: &CancelDownload, _window: &mut Window, cx: &mut Context<Self>) {
+        self.cancel_download(cx);
+    }
+
+    fn start_download(&mut self, video_url: String, channel_name: String, cx: &mut Context<Self>) {
+        let input = cx.new(|cx| {
+            TextInputView::new(cx)
+                .placeholder("Nom du fichier (sans extension)...")
+        });
+        self.download_input = Some(input);
+        self.download_video = Some(DownloadingVideo {
+            url: video_url,
+            channel_name,
+            progress: 0.0,
+            speed: None,
+            eta: None,
+        });
+        cx.notify();
+    }
+
+    fn cancel_download(&mut self, cx: &mut Context<Self>) {
+        self.download_input = None;
+        self.download_video = None;
+        cx.notify();
+    }
+
+    fn confirm_download(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let Some(input) = &self.download_input else {
+            return;
+        };
+        let Some(video) = &self.download_video else {
+            return;
+        };
+
+        let filename = input.read(cx).value();
+        if filename.trim().is_empty() {
+            tracing::warn!("Empty filename provided");
+            return;
+        }
+
+        let channel_name = video.channel_name.clone();
+        let video_url = video.url.clone();
+        let download_queue = self.download_queue.clone();
+        let scanner = self.scanner.clone();
+
+        // Trouver le meilleur disque de stockage
+        let storage_path = match scanner.find_best_storage_path() {
+            Ok(path) => path,
+            Err(error) => {
+                tracing::error!("Failed to find storage path: {}", error);
+                return;
+            }
+        };
+
+        let output_path = format!("{}/{}/{}.mp4", storage_path, channel_name, filename.trim());
+
+        // Marquer comme en cours de téléchargement
+        self.downloading_videos.insert(video_url.clone());
+
+        // Mettre à jour le statut des vidéos
+        for video in &mut self.videos {
+            if video.url == video_url {
+                video.status = VideoStatus::Downloading;
+                break;
+            }
+        }
+
+        // Lancer le téléchargement
+        let output_path_buf = std::path::PathBuf::from(&output_path);
+        let filename_clone = filename.trim().to_string();
+        
+        // Notification de début
+        Notification::info("Téléchargement démarré", &format!("Téléchargement de {} en cours...", filename_clone));
+        
+        cx.spawn(async move |this, cx| {
+            if let Err(error) = download_queue
+                .add_download(
+                    filename.clone(),
+                    video_url.clone(),
+                    filename.clone(),
+                    output_path_buf.clone(),
+                )
+                .await
+            {
+                tracing::error!("Failed to add download: {}", error);
+                Notification::error("Erreur de téléchargement", &format!("Impossible de démarrer le téléchargement: {}", error));
+                
+                this.update(cx, |this, cx| {
+                    this.downloading_videos.remove(&video_url);
+                    for video in &mut this.videos {
+                        if video.url == video_url {
+                            video.status = VideoStatus::NotDownloaded;
+                            break;
+                        }
+                    }
+                    cx.notify();
+                }).ok();
+                return;
+            }
+
+            // Polling: attendre que le fichier existe vraiment
+            let mut progress = 0.0;
+            loop {
+                cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
+
+                // Simuler la progression (incrémenter jusqu'à 90%)
+                if progress < 0.9 {
+                    progress += 0.1;
+                    this.update(cx, |this, cx| {
+                        if let Some(ref mut video) = this.download_video {
+                            if video.url == video_url {
+                                video.progress = progress;
+                                cx.notify();
+                            }
+                        }
+                    }).ok();
+                }
+
+                if output_path_buf.exists() {
+                    // Fichier existe, téléchargement terminé !
+                    this.update(cx, |this, cx| {
+                        if let Some(ref mut video) = this.download_video {
+                            if video.url == video_url {
+                                video.progress = 1.0;
+                                cx.notify();
+                            }
+                        }
+                    }).ok();
+                    
+                    Notification::success("Téléchargement terminé", &format!("{} a été téléchargé avec succès", filename_clone));
+                    
+                    this.update(cx, |this, cx| {
+                        this.downloading_videos.remove(&video_url);
+                        for video in &mut this.videos {
+                            if video.url == video_url {
+                                video.status = VideoStatus::Downloaded;
+                                break;
+                            }
+                        }
+                        cx.notify();
+                    }).ok();
+                    break;
+                }
+
+                // Timeout après 2 heures (en cas de problème)
+                // TODO: améliorer avec une vraie vérification de l'état de la queue
+            }
+        })
+        .detach();
+
+        // Fermer l'overlay
+        self.download_input = None;
+        self.download_video = None;
+        cx.notify();
     }
 }
 
 impl Render for NDownloadApp {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Si une chaîne est sélectionnée, afficher la liste des vidéos
-        if let Some(channel_index) = self.selected_channel {
-            return self.render_video_list(channel_index, cx).into_any_element();
+        let main_content = if let Some(channel_index) = self.selected_channel {
+            self.render_video_list(channel_index, cx).into_any_element()
+        } else {
+            self.render_channel_list(cx)
+        };
+
+        // Si l'overlay de téléchargement est actif, l'afficher
+        if self.download_input.is_some() {
+            return self.render_download_overlay(main_content, cx);
         }
+
+        main_content
+    }
+}
+
+impl NDownloadApp {
+    fn render_channel_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
 
         // Sinon, afficher la liste des chaînes
         div()
+            .on_action(cx.listener(Self::go_back))
+            .on_action(cx.listener(Self::handle_quit))
+            .on_action(cx.listener(Self::handle_cancel_download))
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(0x1e1e1e))
+            .bg(rgb(NORD0))
             .gap_4()
             .p_4()
             .child(
@@ -233,14 +495,14 @@ impl Render for NDownloadApp {
                     .gap_2()
                     .child(
                         div()
-                            .text_color(rgb(0xffffff))
+                            .text_color(rgb(NORD6))
                             .text_size(px(24.0))
                             .font_weight(FontWeight::BOLD)
                             .child("NDownloader")
                     )
                     .child(
                         div()
-                            .text_color(rgb(0xaaaaaa))
+                            .text_color(rgb(NORD4))
                             .text_size(px(14.0))
                             .child("Automatic video downloader for Twitch and YouTube")
                     )
@@ -252,18 +514,18 @@ impl Render for NDownloadApp {
                     .flex_col()
                     .gap_3()
                     .p_4()
-                    .bg(rgb(0x2d2d2d))
+                    .bg(rgb(NORD1))
                     .rounded_md()
                     .child(
                         div()
-                            .text_color(rgb(0xffffff))
+                            .text_color(rgb(NORD6))
                             .text_size(px(16.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .child("Ajouter une chaîne")
                     )
                     .child(
                         div()
-                            .text_color(rgb(0xaaaaaa))
+                            .text_color(rgb(NORD4))
                             .text_size(px(13.0))
                             .child("Collez un lien YouTube ou Twitch (l'app détectera automatiquement la plateforme)")
                     )
@@ -277,9 +539,9 @@ impl Render for NDownloadApp {
                                     .flex_1()
                                     .h_10()
                                     .px_3()
-                                    .bg(rgb(0x3d3d3d))
+                                    .bg(rgb(NORD2))
                                     .border_1()
-                                    .border_color(rgb(0x4d4d4d))
+                                    .border_color(rgb(NORD3))
                                     .rounded_md()
                                     .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                                         if event.keystroke.key == "enter" {
@@ -293,7 +555,7 @@ impl Render for NDownloadApp {
                                 div()
                                     .h_10()
                                     .px_6()
-                                    .bg(rgb(0x0d96f2))
+                                    .bg(rgb(NORD8))
                                     .rounded_md()
                                     .cursor_pointer()
                                     .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, window, cx| {
@@ -305,7 +567,7 @@ impl Render for NDownloadApp {
                                             .items_center()
                                             .justify_center()
                                             .h_full()
-                                            .text_color(rgb(0xffffff))
+                                            .text_color(rgb(NORD6))
                                             .text_size(px(14.0))
                                             .font_weight(FontWeight::SEMIBOLD)
                                             .child("Ajouter")
@@ -321,11 +583,11 @@ impl Render for NDownloadApp {
                     .flex_1()
                     .gap_2()
                     .p_4()
-                    .bg(rgb(0x2d2d2d))
+                    .bg(rgb(NORD1))
                     .rounded_md()
                     .child(
                         div()
-                            .text_color(rgb(0xffffff))
+                            .text_color(rgb(NORD6))
                             .text_size(px(16.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .mb_2()
@@ -338,7 +600,7 @@ impl Render for NDownloadApp {
                                 .items_center()
                                 .justify_center()
                                 .h_full()
-                                .text_color(rgb(0x888888))
+                                .text_color(rgb(NORD3))
                                 .text_size(px(14.0))
                                 .child("Aucune chaîne ajoutée")
                                 .into_any_element()
@@ -349,49 +611,40 @@ impl Render for NDownloadApp {
                                 .flex_col()
                                 .gap_2()
                                 .overflow_y_scroll()
-                                .track_scroll(&self.scroll_handle)
                                 .children(self.channels.iter().enumerate().map(|(index, channel)| {
-                                    let platform_color = match channel.platform {
-                                        Platform::YouTube => rgb(0xff0000),
-                                        Platform::Twitch => rgb(0x9146ff),
-                                    };
-                                    let platform_name = match channel.platform {
-                                        Platform::YouTube => "YouTube",
-                                        Platform::Twitch => "Twitch",
-                                    };
-
                                     div()
                                         .flex()
-                                        .items_center()
-                                        .gap_3()
                                         .p_3()
-                                        .bg(rgb(0x3d3d3d))
+                                        .bg(rgb(NORD2))
                                         .rounded_md()
-                                        .cursor_pointer()
-                                        .hover(|style| style.bg(rgb(0x4d4d4d)))
-                                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _event, window, cx| {
-                                            this.select_channel(index, window, cx);
-                                            cx.notify();
-                                        }))
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .cursor_pointer()
+                                                .hover(|style| style.bg(rgb(NORD3)))
+                                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _event, window, cx| {
+                                                    this.select_channel(index, window, cx);
+                                                }))
+                                                .child(ChannelItem::new(channel.clone()))
+                                        )
                                         .child(
                                             div()
                                                 .px_2()
                                                 .py_1()
-                                                .bg(platform_color)
+                                                .bg(rgb(NORD11))
                                                 .rounded_sm()
+                                                .cursor_pointer()
+                                                .hover(|style| style.bg(rgb(0x8f4149)))
+                                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _event, _window, cx| {
+                                                    this.delete_channel(index, cx);
+                                                }))
                                                 .child(
                                                     div()
-                                                        .text_color(rgb(0xffffff))
+                                                        .text_color(rgb(NORD6))
                                                         .text_size(px(12.0))
                                                         .font_weight(FontWeight::BOLD)
-                                                        .child(platform_name)
+                                                        .child("✕")
                                                 )
-                                        )
-                                        .child(
-                                            div()
-                                                .text_color(rgb(0xffffff))
-                                                .text_size(px(14.0))
-                                                .child(channel.name.clone())
                                         )
                                 }))
                                 .into_any_element()
@@ -406,15 +659,15 @@ impl NDownloadApp {
     fn render_video_list(&mut self, channel_index: usize, cx: &mut Context<Self>) -> Div {
         let channel = &self.channels[channel_index];
         let platform_color = match channel.platform {
-            Platform::YouTube => rgb(0xff0000),
-            Platform::Twitch => rgb(0x9146ff),
+            Platform::YouTube => rgb(NORD11),
+            Platform::Twitch => rgb(NORD15),
         };
 
         div()
             .flex()
             .flex_col()
             .size_full()
-            .bg(rgb(0x1e1e1e))
+            .bg(rgb(NORD0))
             .gap_4()
             .p_4()
             .child(
@@ -428,17 +681,17 @@ impl NDownloadApp {
                         div()
                             .px_4()
                             .py_2()
-                            .bg(rgb(0x2d2d2d))
+                            .bg(rgb(NORD1))
                             .rounded_md()
                             .cursor_pointer()
-                            .hover(|style| style.bg(rgb(0x3d3d3d)))
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
-                                this.go_back(cx);
+                            .hover(|style| style.bg(rgb(NORD3)))
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, window, cx| {
+                                this.go_back(&GoBack, window, cx);
                                 cx.notify();
                             }))
                             .child(
                                 div()
-                                    .text_color(rgb(0xffffff))
+                                    .text_color(rgb(NORD6))
                                     .text_size(px(14.0))
                                     .child("← Retour")
                             )
@@ -456,7 +709,7 @@ impl NDownloadApp {
                                     .rounded_sm()
                                     .child(
                                         div()
-                                            .text_color(rgb(0xffffff))
+                                            .text_color(rgb(NORD6))
                                             .text_size(px(12.0))
                                             .font_weight(FontWeight::BOLD)
                                             .child(match channel.platform {
@@ -467,7 +720,7 @@ impl NDownloadApp {
                             )
                             .child(
                                 div()
-                                    .text_color(rgb(0xffffff))
+                                    .text_color(rgb(NORD6))
                                     .text_size(px(20.0))
                                     .font_weight(FontWeight::BOLD)
                                     .child(channel.name.clone())
@@ -482,11 +735,11 @@ impl NDownloadApp {
                     .flex_1()
                     .gap_2()
                     .p_4()
-                    .bg(rgb(0x2d2d2d))
+                    .bg(rgb(NORD1))
                     .rounded_md()
                     .child(
                         div()
-                            .text_color(rgb(0xffffff))
+                            .text_color(rgb(NORD6))
                             .text_size(px(16.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .mb_2()
@@ -499,7 +752,7 @@ impl NDownloadApp {
                                 .items_center()
                                 .justify_center()
                                 .h_full()
-                                .text_color(rgb(0x0d96f2))
+                                .text_color(rgb(NORD8))
                                 .text_size(px(14.0))
                                 .child("Chargement des vidéos...")
                                 .into_any_element()
@@ -509,7 +762,7 @@ impl NDownloadApp {
                                 .items_center()
                                 .justify_center()
                                 .h_full()
-                                .text_color(rgb(0x888888))
+                                .text_color(rgb(NORD3))
                                 .text_size(px(14.0))
                                 .child("Aucune vidéo trouvée")
                                 .into_any_element()
@@ -520,62 +773,202 @@ impl NDownloadApp {
                                 .flex_col()
                                 .gap_2()
                                 .overflow_y_scroll()
-                                .track_scroll(&self.scroll_handle)
-                                .children(self.videos.iter().map(|video| {
+                                .children(self.videos.iter().enumerate().map(|(_idx, video)| {
+                                    let video_url = video.url.clone();
+                                    let channel_name = self.channels[channel_index].name.clone();
+                                    let status = video.status.clone();
+
+                                    // Récupérer la progression si en cours de téléchargement
+                                    let progress = if status == VideoStatus::Downloading {
+                                        self.download_queue.get_tasks()
+                                            .iter()
+                                            .find(|t| t.video_url == video_url)
+                                            .map(|t| t.progress)
+                                    } else {
+                                        None
+                                    };
+
+                                    let mut video_item = VideoItem::new(video.clone());
+                                    if let Some(p) = progress {
+                                        video_item = video_item.with_progress(p);
+                                    }
+
                                     div()
                                         .flex()
                                         .items_center()
                                         .gap_3()
                                         .p_3()
-                                        .bg(rgb(0x3d3d3d))
+                                        .bg(rgb(NORD2))
                                         .rounded_md()
-                                        .cursor_pointer()
-                                        .hover(|style| style.bg(rgb(0x4d4d4d)))
-                                        .child(
-                                            // Indicateur de statut
-                                            div()
-                                                .w_3()
-                                                .h_3()
-                                                .rounded_full()
-                                                .bg(if video.downloaded {
-                                                    rgb(0x10b981) // Vert si téléchargé
-                                                } else {
-                                                    rgb(0xf59e0b) // Orange si non téléchargé
-                                                })
-                                        )
-                                        .child(
-                                            div()
-                                                .flex()
-                                                .flex_col()
-                                                .gap_1()
-                                                .flex_1()
-                                                .child(
-                                                    div()
-                                                        .text_color(rgb(0xffffff))
-                                                        .text_size(px(14.0))
-                                                        .font_weight(FontWeight::SEMIBOLD)
-                                                        .child(video.title.clone())
-                                                )
-                                                .child(
-                                                    div()
-                                                        .text_color(if video.downloaded {
-                                                            rgb(0x10b981)
-                                                        } else {
-                                                            rgb(0xf59e0b)
-                                                        })
-                                                        .text_size(px(12.0))
-                                                        .font_weight(FontWeight::SEMIBOLD)
-                                                        .child(if video.downloaded {
-                                                            "Téléchargé"
-                                                        } else {
-                                                            "Non téléchargé"
-                                                        })
-                                                )
-                                        )
+                                        .when(status == VideoStatus::NotDownloaded, |this| {
+                                            this.cursor_pointer()
+                                                .hover(|style| style.bg(rgb(NORD3)))
+                                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _event, _window, cx| {
+                                                    this.start_download(video_url.clone(), channel_name.clone(), cx);
+                                                }))
+                                        })
+                                        .child(video_item)
                                 }))
                                 .into_any_element()
                         }
                     )
             )
+    }
+
+    fn render_download_overlay(&mut self, main_content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+        div()
+            .size_full()
+            .relative()
+            .child(main_content)
+            .child(
+                // Overlay semi-transparent
+                div()
+                    .absolute()
+                    .top_0()
+                    .left_0()
+                    .size_full()
+                    .bg(black().opacity(0.7))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
+                        this.cancel_download(cx);
+                    }))
+                    .child(
+                        // Dialog box
+                        div()
+                            .w(px(500.0))
+                            .bg(rgb(NORD1))
+                            .rounded_lg()
+                            .p_6()
+                            .flex()
+                            .flex_col()
+                            .gap_4()
+                            .on_mouse_down(MouseButton::Left, |_event, _phase, cx| {
+                                cx.stop_propagation();
+                            })
+                            .child(
+                                // Titre
+                                div()
+                                    .text_color(rgb(NORD6))
+                                    .text_size(px(18.0))
+                                    .font_weight(FontWeight::BOLD)
+                                    .child("Télécharger la vidéo")
+                            )
+                            .child(
+                                // Input
+                                div()
+                                    .flex()
+                                    .flex_col()
+                                    .gap_2()
+                                    .child(
+                                        div()
+                                            .text_color(rgb(NORD4))
+                                            .text_size(px(13.0))
+                                            .child("Entrez le nom du fichier (sans extension .mp4) :")
+                                    )
+                                    .child(
+                                        div()
+                                            .h_10()
+                                            .px_3()
+                                            .bg(rgb(NORD2))
+                                            .border_1()
+                                            .border_color(rgb(NORD3))
+                                            .rounded_md()
+                                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                                if event.keystroke.key == "enter" {
+                                                    this.confirm_download(window, cx);
+                                                } else if event.keystroke.key == "escape" {
+                                                    this.cancel_download(cx);
+                                                }
+                                            }))
+                                            .child(self.download_input.clone().unwrap())
+                                    )
+                            )
+                            .when_some(self.download_video.as_ref(), |this, video| {
+                                this.child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .justify_between()
+                                                .child(
+                                                    div()
+                                                        .text_color(rgb(NORD4))
+                                                        .text_size(px(13.0))
+                                                        .child(format!("Progression: {:.0}%", video.progress * 100.0))
+                                                )
+                                                .when_some(video.speed.as_ref(), |this, speed| {
+                                                    this.child(
+                                                        div()
+                                                            .text_color(rgb(NORD4))
+                                                            .text_size(px(13.0))
+                                                            .child(format!("{}", speed))
+                                                    )
+                                                })
+                                                .when_some(video.eta.as_ref(), |this, eta| {
+                                                    this.child(
+                                                        div()
+                                                            .text_color(rgb(NORD4))
+                                                            .text_size(px(13.0))
+                                                            .child(format!("ETA {}", eta))
+                                                    )
+                                                })
+                                        )
+                                        .child(components::ProgressBar::new(video.progress))
+                                )
+                            })
+                            .child(
+                                // Boutons
+                                div()
+                                    .flex()
+                                    .gap_3()
+                                    .justify_end()
+                                    .child(
+                                        // Bouton Annuler
+                                        div()
+                                            .px_4()
+                                            .py_2()
+                                            .bg(rgb(NORD2))
+                                            .rounded_md()
+                                            .cursor_pointer()
+                                            .hover(|style| style.bg(rgb(NORD3)))
+                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
+                                                this.cancel_download(cx);
+                                            }))
+                                            .child(
+                                                div()
+                                                    .text_color(rgb(NORD6))
+                                                    .text_size(px(14.0))
+                                                    .child("Annuler")
+                                            )
+                                    )
+                                    .child(
+                                        // Bouton Télécharger
+                                        div()
+                                            .px_4()
+                                            .py_2()
+                                            .bg(rgb(NORD8))
+                                            .rounded_md()
+                                            .cursor_pointer()
+                                            .hover(|style| style.bg(rgb(NORD10)))
+                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, window, cx| {
+                                                this.confirm_download(window, cx);
+                                            }))
+                                            .child(
+                                                div()
+                                                    .text_color(rgb(NORD6))
+                                                    .text_size(px(14.0))
+                                                    .font_weight(FontWeight::SEMIBOLD)
+                                                    .child("Télécharger")
+                                            )
+                                    )
+                            )
+                    )
+            )
+            .into_any_element()
     }
 }

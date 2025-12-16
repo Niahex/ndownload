@@ -78,6 +78,7 @@
           mesa.drivers
           yt-dlp
           ffmpeg
+          libnotify  # Pour les notifications système
         ];
 
         nativeBuildInputs = with pkgs; [

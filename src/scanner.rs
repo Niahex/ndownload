@@ -4,7 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use crate::cache::Cache;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VideoMetadata {
@@ -19,68 +20,25 @@ pub struct VideoMetadata {
     pub uploader: Option<String>,
 }
 
-#[derive(Serialize, Deserialize)]
-struct CacheEntry {
-    videos: Vec<VideoMetadata>,
-    #[serde(with = "instant_serde")]
-    timestamp: Instant,
-}
-
-mod instant_serde {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    use std::time::{Duration, Instant};
-
-    pub fn serialize<S>(instant: &Instant, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let elapsed = instant.elapsed().as_secs();
-        elapsed.serialize(serializer)
-    }
-
-    pub fn deserialize<'de, D>(deserializer: D) -> Result<Instant, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let elapsed = u64::deserialize(deserializer)?;
-        Ok(Instant::now() - Duration::from_secs(elapsed))
-    }
-}
-
-const VIDEOS_CACHE_FILE: &str = "/tmp/ndownload_videos_cache.json";
-
 pub struct VideoScanner {
     storage_paths: Vec<String>,
-    cache: Arc<Mutex<HashMap<String, CacheEntry>>>,
-    cache_duration: Duration,
+    cache: Cache<Vec<VideoMetadata>>,
     file_durations_cache: Arc<Mutex<HashMap<String, f64>>>,
 }
 
 impl VideoScanner {
     pub fn new() -> Self {
-        let cache = Self::load_cache();
         Self {
             storage_paths: vec![
                 "/run/mount/ve_stock_1".to_string(),
                 "/run/mount/ve_stock_2".to_string(),
                 "/run/mount/ve_ext_1".to_string(),
             ],
-            cache: Arc::new(Mutex::new(cache)),
-            cache_duration: Duration::from_secs(300), // Cache de 5 minutes
+            cache: Cache::new(
+                std::path::PathBuf::from("/tmp/ndownload_videos_cache.json"),
+                Duration::from_secs(300),
+            ),
             file_durations_cache: Arc::new(Mutex::new(HashMap::new())),
-        }
-    }
-
-    fn load_cache() -> HashMap<String, CacheEntry> {
-        match std::fs::read_to_string(VIDEOS_CACHE_FILE) {
-            Ok(content) => serde_json::from_str(&content).unwrap_or_default(),
-            Err(_) => HashMap::new(),
-        }
-    }
-
-    fn save_cache(cache: &HashMap<String, CacheEntry>) {
-        if let Ok(content) = serde_json::to_string_pretty(cache) {
-            let _ = std::fs::write(VIDEOS_CACHE_FILE, content);
         }
     }
 
@@ -98,14 +56,9 @@ impl VideoScanner {
         tracing::info!("URL utilisée: {}", url);
 
         // Vérifier le cache
-        {
-            let cache = self.cache.lock();
-            if let Some(entry) = cache.get(&url) {
-                if entry.timestamp.elapsed() < self.cache_duration {
-                    tracing::info!("Utilisation du cache pour: {}", url);
-                    return Ok(entry.videos.clone());
-                }
-            }
+        if let Some(videos) = self.cache.get(&url) {
+            tracing::info!("Utilisation du cache pour: {}", url);
+            return Ok(videos);
         }
 
         let output = smol::process::Command::new("yt-dlp")
@@ -149,14 +102,7 @@ impl VideoScanner {
         tracing::info!("Trouvé {} vidéos", videos.len());
 
         // Mettre à jour le cache
-        {
-            let mut cache = self.cache.lock();
-            cache.insert(url.clone(), CacheEntry {
-                videos: videos.clone(),
-                timestamp: Instant::now(),
-            });
-            Self::save_cache(&cache);
-        }
+        self.cache.set(url.clone(), videos.clone());
 
         Ok(videos)
     }

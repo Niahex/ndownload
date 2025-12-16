@@ -1,15 +1,17 @@
 use anyhow::Result;
 use gpui::*;
 
+mod cache;
 mod config;
 mod database;
 mod downloader;
 mod downloader_queue;
+mod notifications;
 mod platforms;
 mod scanner;
 mod ui;
 
-use ui::NDownloadApp;
+use ui::{NDownloadApp, actions::*};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -19,6 +21,15 @@ fn main() -> Result<()> {
     Application::new().run(|cx: &mut App| {
         cx.activate(true);
         cx.on_action(quit);
+
+        // Bind keyboard shortcuts
+        cx.bind_keys([
+            KeyBinding::new("cmd-q", Quit, None),
+            KeyBinding::new("ctrl-q", Quit, None),
+            KeyBinding::new("escape", GoBack, None),
+            KeyBinding::new("cmd-w", GoBack, None),
+            KeyBinding::new("ctrl-w", GoBack, None),
+        ]);
 
         let bounds = Bounds::centered(None, size(px(1200.0), px(800.0)), cx);
 
@@ -52,5 +63,3 @@ fn main() -> Result<()> {
 fn quit(_: &Quit, cx: &mut App) {
     cx.quit();
 }
-
-actions!(ndownload, [Quit]);
