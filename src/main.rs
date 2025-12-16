@@ -38,7 +38,7 @@ fn main() -> Result<()> {
                 }),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| NDownloadApp::new(cx)),
+            |window, cx| cx.new(|cx| NDownloadApp::new(window, cx)),
         );
     });
 

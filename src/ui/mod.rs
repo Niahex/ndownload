@@ -1,14 +1,29 @@
 use gpui::*;
 
+mod text_input;
+use text_input::TextInputView;
+
 pub struct NDownloadApp {
-    search_query: SharedString,
+    url_input: Entity<TextInputView>,
     channels: Vec<Channel>,
+    selected_channel: Option<usize>,
+    videos: Vec<VideoInfo>,
 }
 
 #[derive(Clone, Debug)]
 struct Channel {
     name: String,
     platform: Platform,
+    url: String,
+}
+
+#[derive(Clone, Debug)]
+struct VideoInfo {
+    id: String,
+    title: String,
+    url: String,
+    upload_date: Option<String>,
+    downloaded: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -17,21 +32,132 @@ enum Platform {
     Twitch,
 }
 
-impl NDownloadApp {
-    pub fn new(_cx: &mut Context<Self>) -> Self {
-        Self {
-            search_query: "".into(),
-            channels: Vec::new(),
+impl Platform {
+    fn from_url(url: &str) -> Option<Self> {
+        if url.contains("youtube.com") || url.contains("youtu.be") {
+            Some(Platform::YouTube)
+        } else if url.contains("twitch.tv") {
+            Some(Platform::Twitch)
+        } else {
+            None
         }
     }
 
-    fn add_channel(&mut self, name: String, platform: Platform) {
-        self.channels.push(Channel { name, platform });
+    fn extract_channel_name(url: &str) -> Option<String> {
+        // Pour YouTube: youtube.com/@channel ou youtube.com/c/channel
+        if url.contains("youtube.com") {
+            if let Some(idx) = url.find("/@") {
+                let rest = &url[idx + 2..];
+                return Some(rest.split('/').next()?.to_string());
+            } else if let Some(idx) = url.find("/c/") {
+                let rest = &url[idx + 3..];
+                return Some(rest.split('/').next()?.to_string());
+            } else if let Some(idx) = url.find("/channel/") {
+                let rest = &url[idx + 9..];
+                return Some(rest.split('/').next()?.to_string());
+            }
+        }
+
+        // Pour Twitch: twitch.tv/channel
+        if url.contains("twitch.tv/") {
+            if let Some(idx) = url.find("twitch.tv/") {
+                let rest = &url[idx + 10..];
+                let channel = rest.split('/').next()?;
+                if !channel.is_empty() && channel != "videos" {
+                    return Some(channel.to_string());
+                }
+            }
+        }
+
+        None
+    }
+}
+
+impl NDownloadApp {
+    pub fn new(_window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let url_input = cx.new(|cx| {
+            TextInputView::new(cx)
+                .placeholder("Collez un lien YouTube ou Twitch...")
+                .on_enter(move |_text| {
+                    // L'action sera gérée directement par handle_add_channel
+                })
+        });
+
+        Self {
+            url_input,
+            channels: Vec::new(),
+            selected_channel: None,
+            videos: Vec::new(),
+        }
+    }
+
+    fn add_channel_from_url(&mut self, url: String) {
+        if let Some(platform) = Platform::from_url(&url) {
+            if let Some(name) = Platform::extract_channel_name(&url) {
+                self.channels.push(Channel {
+                    name,
+                    platform,
+                    url,
+                });
+            }
+        }
+    }
+
+    fn handle_add_channel(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let url = self.url_input.read(cx).value();
+        if !url.trim().is_empty() {
+            self.add_channel_from_url(url);
+            // Clear the input
+            self.url_input.update(cx, |input, _cx| {
+                input.clear();
+            });
+            cx.notify();
+        }
+    }
+
+    fn select_channel(&mut self, index: usize, _cx: &mut Context<Self>) {
+        self.selected_channel = Some(index);
+        // Pour l'instant, on crée des vidéos de test
+        // TODO: Scanner les vraies vidéos avec yt-dlp
+        self.videos = vec![
+            VideoInfo {
+                id: "vid1".to_string(),
+                title: "Vidéo de test 1".to_string(),
+                url: "https://example.com/1".to_string(),
+                upload_date: Some("2024-01-15".to_string()),
+                downloaded: false,
+            },
+            VideoInfo {
+                id: "vid2".to_string(),
+                title: "Vidéo de test 2".to_string(),
+                url: "https://example.com/2".to_string(),
+                upload_date: Some("2024-01-14".to_string()),
+                downloaded: true,
+            },
+            VideoInfo {
+                id: "vid3".to_string(),
+                title: "Vidéo de test 3".to_string(),
+                url: "https://example.com/3".to_string(),
+                upload_date: Some("2024-01-13".to_string()),
+                downloaded: false,
+            },
+        ];
+    }
+
+    fn go_back(&mut self, _cx: &mut Context<Self>) {
+        self.selected_channel = None;
+        self.videos.clear();
     }
 }
 
 impl Render for NDownloadApp {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Si une chaîne est sélectionnée, afficher la liste des vidéos
+        if let Some(channel_index) = self.selected_channel {
+            return self.render_video_list(channel_index, cx).into_any_element();
+        }
+
+        // Sinon, afficher la liste des chaînes
         div()
             .flex()
             .flex_col()
@@ -60,7 +186,7 @@ impl Render for NDownloadApp {
                     )
             )
             .child(
-                // Search bar section
+                // URL input section
                 div()
                     .flex()
                     .flex_col()
@@ -76,7 +202,13 @@ impl Render for NDownloadApp {
                             .child("Ajouter une chaîne")
                     )
                     .child(
-                        // Search input
+                        div()
+                            .text_color(rgb(0xaaaaaa))
+                            .text_size(px(13.0))
+                            .child("Collez un lien YouTube ou Twitch (l'app détectera automatiquement la plateforme)")
+                    )
+                    .child(
+                        // URL input and button
                         div()
                             .flex()
                             .gap_2()
@@ -89,23 +221,24 @@ impl Render for NDownloadApp {
                                     .border_1()
                                     .border_color(rgb(0x4d4d4d))
                                     .rounded_md()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .h_full()
-                                            .text_color(rgb(0xcccccc))
-                                            .text_size(px(14.0))
-                                            .child("Nom de la chaîne...")
-                                    )
+                                    .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
+                                        if event.keystroke.key == "enter" {
+                                            this.handle_add_channel(window, cx);
+                                        }
+                                    }))
+                                    .child(self.url_input.clone())
                             )
                             .child(
-                                // YouTube button
+                                // Add button
                                 div()
                                     .h_10()
-                                    .px_4()
-                                    .bg(rgb(0xff0000))
+                                    .px_6()
+                                    .bg(rgb(0x0d96f2))
                                     .rounded_md()
+                                    .cursor_pointer()
+                                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, window, cx| {
+                                        this.handle_add_channel(window, cx);
+                                    }))
                                     .child(
                                         div()
                                             .flex()
@@ -115,26 +248,7 @@ impl Render for NDownloadApp {
                                             .text_color(rgb(0xffffff))
                                             .text_size(px(14.0))
                                             .font_weight(FontWeight::SEMIBOLD)
-                                            .child("YouTube")
-                                    )
-                            )
-                            .child(
-                                // Twitch button
-                                div()
-                                    .h_10()
-                                    .px_4()
-                                    .bg(rgb(0x9146ff))
-                                    .rounded_md()
-                                    .child(
-                                        div()
-                                            .flex()
-                                            .items_center()
-                                            .justify_center()
-                                            .h_full()
-                                            .text_color(rgb(0xffffff))
-                                            .text_size(px(14.0))
-                                            .font_weight(FontWeight::SEMIBOLD)
-                                            .child("Twitch")
+                                            .child("Ajouter")
                                     )
                             )
                     )
@@ -173,7 +287,7 @@ impl Render for NDownloadApp {
                                 .flex()
                                 .flex_col()
                                 .gap_2()
-                                .children(self.channels.iter().map(|channel| {
+                                .children(self.channels.iter().enumerate().map(|(index, channel)| {
                                     let platform_color = match channel.platform {
                                         Platform::YouTube => rgb(0xff0000),
                                         Platform::Twitch => rgb(0x9146ff),
@@ -190,6 +304,12 @@ impl Render for NDownloadApp {
                                         .p_3()
                                         .bg(rgb(0x3d3d3d))
                                         .rounded_md()
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(rgb(0x4d4d4d)))
+                                        .on_mouse_down(MouseButton::Left, cx.listener(move |this, _event, _window, cx| {
+                                            this.select_channel(index, cx);
+                                            cx.notify();
+                                        }))
                                         .child(
                                             div()
                                                 .px_2()
@@ -209,6 +329,183 @@ impl Render for NDownloadApp {
                                                 .text_color(rgb(0xffffff))
                                                 .text_size(px(14.0))
                                                 .child(channel.name.clone())
+                                        )
+                                }))
+                                .into_any_element()
+                        }
+                    )
+            )
+            .into_any_element()
+    }
+}
+
+impl NDownloadApp {
+    fn render_video_list(&mut self, channel_index: usize, cx: &mut Context<Self>) -> Div {
+        let channel = &self.channels[channel_index];
+        let platform_color = match channel.platform {
+            Platform::YouTube => rgb(0xff0000),
+            Platform::Twitch => rgb(0x9146ff),
+        };
+
+        div()
+            .flex()
+            .flex_col()
+            .size_full()
+            .bg(rgb(0x1e1e1e))
+            .gap_4()
+            .p_4()
+            .child(
+                // Header avec bouton retour
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_4()
+                    .child(
+                        // Bouton retour
+                        div()
+                            .px_4()
+                            .py_2()
+                            .bg(rgb(0x2d2d2d))
+                            .rounded_md()
+                            .cursor_pointer()
+                            .hover(|style| style.bg(rgb(0x3d3d3d)))
+                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
+                                this.go_back(cx);
+                                cx.notify();
+                            }))
+                            .child(
+                                div()
+                                    .text_color(rgb(0xffffff))
+                                    .text_size(px(14.0))
+                                    .child("← Retour")
+                            )
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap_3()
+                            .child(
+                                div()
+                                    .px_2()
+                                    .py_1()
+                                    .bg(platform_color)
+                                    .rounded_sm()
+                                    .child(
+                                        div()
+                                            .text_color(rgb(0xffffff))
+                                            .text_size(px(12.0))
+                                            .font_weight(FontWeight::BOLD)
+                                            .child(match channel.platform {
+                                                Platform::YouTube => "YouTube",
+                                                Platform::Twitch => "Twitch",
+                                            })
+                                    )
+                            )
+                            .child(
+                                div()
+                                    .text_color(rgb(0xffffff))
+                                    .text_size(px(20.0))
+                                    .font_weight(FontWeight::BOLD)
+                                    .child(channel.name.clone())
+                            )
+                    )
+            )
+            .child(
+                // Liste des vidéos
+                div()
+                    .flex()
+                    .flex_col()
+                    .flex_1()
+                    .gap_2()
+                    .p_4()
+                    .bg(rgb(0x2d2d2d))
+                    .rounded_md()
+                    .child(
+                        div()
+                            .text_color(rgb(0xffffff))
+                            .text_size(px(16.0))
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .mb_2()
+                            .child(format!("Vidéos disponibles ({})", self.videos.len()))
+                    )
+                    .child(
+                        if self.videos.is_empty() {
+                            div()
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .h_full()
+                                .text_color(rgb(0x888888))
+                                .text_size(px(14.0))
+                                .child("Aucune vidéo trouvée")
+                                .into_any_element()
+                        } else {
+                            div()
+                                .flex()
+                                .flex_col()
+                                .gap_2()
+                                .children(self.videos.iter().map(|video| {
+                                    div()
+                                        .flex()
+                                        .items_center()
+                                        .gap_3()
+                                        .p_3()
+                                        .bg(rgb(0x3d3d3d))
+                                        .rounded_md()
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(rgb(0x4d4d4d)))
+                                        .child(
+                                            // Indicateur de statut
+                                            div()
+                                                .w_3()
+                                                .h_3()
+                                                .rounded_full()
+                                                .bg(if video.downloaded {
+                                                    rgb(0x10b981) // Vert si téléchargé
+                                                } else {
+                                                    rgb(0xf59e0b) // Orange si non téléchargé
+                                                })
+                                        )
+                                        .child(
+                                            div()
+                                                .flex()
+                                                .flex_col()
+                                                .gap_1()
+                                                .flex_1()
+                                                .child(
+                                                    div()
+                                                        .text_color(rgb(0xffffff))
+                                                        .text_size(px(14.0))
+                                                        .font_weight(FontWeight::SEMIBOLD)
+                                                        .child(video.title.clone())
+                                                )
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .gap_2()
+                                                        .child(
+                                                            div()
+                                                                .text_color(rgb(0xaaaaaa))
+                                                                .text_size(px(12.0))
+                                                                .child(video.upload_date.clone().unwrap_or_else(|| "Date inconnue".to_string()))
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .text_color(if video.downloaded {
+                                                                    rgb(0x10b981)
+                                                                } else {
+                                                                    rgb(0xf59e0b)
+                                                                })
+                                                                .text_size(px(12.0))
+                                                                .font_weight(FontWeight::SEMIBOLD)
+                                                                .child(if video.downloaded {
+                                                                    "Téléchargé"
+                                                                } else {
+                                                                    "Non téléchargé"
+                                                                })
+                                                        )
+                                                )
                                         )
                                 }))
                                 .into_any_element()
