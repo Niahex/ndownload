@@ -1,7 +1,6 @@
 use anyhow::Result;
 use serde::Deserialize;
 use std::process::Stdio;
-use tokio::process::Command;
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct VideoMetadata {
@@ -35,7 +34,7 @@ impl VideoScanner {
     pub async fn scan_channel_videos(&self, channel_url: &str) -> Result<Vec<VideoMetadata>> {
         tracing::info!("Scan des vidéos de: {}", channel_url);
 
-        let output = Command::new("yt-dlp")
+        let output = smol::process::Command::new("yt-dlp")
             .arg("--flat-playlist")
             .arg("--dump-json")
             .arg("--playlist-end")
