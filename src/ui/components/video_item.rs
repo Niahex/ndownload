@@ -1,7 +1,7 @@
-use gpui::*;
 use gpui::prelude::FluentBuilder;
+use gpui::*;
 
-use super::super::{VideoInfo, VideoStatus, NORD6, NORD14, NORD9, NORD13, NORD3};
+use super::super::{VideoInfo, VideoStatus, NORD13, NORD14, NORD6, NORD9};
 use super::ProgressBar;
 
 #[derive(IntoElement)]
@@ -12,7 +12,7 @@ pub struct VideoItem {
 
 impl VideoItem {
     pub fn new(video: VideoInfo) -> Self {
-        Self { 
+        Self {
             video,
             progress: None,
         }
@@ -36,13 +36,7 @@ impl RenderOnce for VideoItem {
             .flex()
             .items_center()
             .gap_3()
-            .child(
-                div()
-                    .w_3()
-                    .h_3()
-                    .rounded_full()
-                    .bg(indicator_color),
-            )
+            .child(div().w_3().h_3().rounded_full().bg(indicator_color))
             .child(
                 div()
                     .flex()
@@ -68,7 +62,7 @@ impl RenderOnce for VideoItem {
                             div()
                                 .w_full()
                                 .mt_1()
-                                .child(ProgressBar::new(self.progress.unwrap()))
+                                .child(ProgressBar::new(self.progress.unwrap())),
                         )
                     }),
             )

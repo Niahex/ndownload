@@ -96,12 +96,10 @@ mod tests {
 
     #[test]
     fn test_cache_set_get() {
-        let cache: Cache<String> = Cache::new(
-            PathBuf::from("test_cache.json"),
-            Duration::from_secs(3600)
-        );
+        let cache: Cache<String> =
+            Cache::new(PathBuf::from("test_cache.json"), Duration::from_secs(3600));
         cache.set("key1".to_string(), "value1".to_string());
-        
+
         assert_eq!(cache.get("key1"), Some("value1".to_string()));
         assert_eq!(cache.get("nonexistent"), None);
     }
@@ -110,13 +108,13 @@ mod tests {
     fn test_cache_clear() {
         let cache: Cache<String> = Cache::new(
             PathBuf::from("test_cache_clear.json"),
-            Duration::from_secs(3600)
+            Duration::from_secs(3600),
         );
         cache.set("key1".to_string(), "value1".to_string());
         cache.set("key2".to_string(), "value2".to_string());
-        
+
         cache.clear();
-        
+
         assert_eq!(cache.get("key1"), None);
         assert_eq!(cache.get("key2"), None);
     }

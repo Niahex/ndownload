@@ -2,16 +2,12 @@ use anyhow::Result;
 use gpui::*;
 
 mod cache;
-mod config;
-mod database;
-mod downloader;
 mod downloader_queue;
 mod notifications;
-mod platforms;
 mod scanner;
 mod ui;
 
-use ui::{NDownloaderApp, actions::*};
+use ui::{actions::*, NDownloaderApp};
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()

@@ -3,10 +3,10 @@ use futures::channel::mpsc;
 use futures::{SinkExt, StreamExt};
 use gpui::AppContext;
 use parking_lot::Mutex;
+use smol::io::{AsyncBufReadExt, BufReader};
 use std::path::PathBuf;
 use std::process::Stdio;
 use std::sync::Arc;
-use smol::io::{AsyncBufReadExt, BufReader};
 
 #[derive(Debug, Clone)]
 pub struct DownloadTask {
@@ -57,7 +57,7 @@ impl DownloadQueue {
                 // Télécharger la vidéo avec mise à jour de progression
                 let tasks_for_progress = tasks_clone.clone();
                 let video_id = task.video_id.clone();
-                
+
                 match Self::download_video(&task, move |progress, speed, eta| {
                     let mut tasks_lock = tasks_for_progress.lock();
                     if let Some(t) = tasks_lock.iter_mut().find(|t| t.video_id == video_id) {
@@ -65,7 +65,9 @@ impl DownloadQueue {
                         t.speed = speed;
                         t.eta = eta;
                     }
-                }).await {
+                })
+                .await
+                {
                     Ok(_) => {
                         tracing::info!("Téléchargement terminé: {}", task.title);
                         task.status = DownloadStatus::Completed;
@@ -86,7 +88,8 @@ impl DownloadQueue {
                     }
                 }
             }
-        }).detach();
+        })
+        .detach();
 
         Self { tasks, tx }
     }
@@ -155,7 +158,7 @@ impl DownloadQueue {
         if let Some(stdout) = child.stdout.take() {
             let reader = BufReader::new(stdout);
             let mut lines = reader.lines();
-            
+
             while let Some(line) = lines.next().await {
                 if let Ok(line) = line {
                     let (progress, speed, eta) = Self::parse_download_line(&line);
@@ -215,7 +218,7 @@ mod tests {
     fn test_parse_progress() {
         let line = "[download]  45.2% of 100.00MiB at 2.5MiB/s ETA 05:30";
         let (progress, speed, eta) = DownloadQueue::parse_download_line(line);
-        
+
         assert!(progress.is_some());
         assert!((progress.unwrap() - 0.452).abs() < 0.001);
         assert_eq!(speed, Some("2.5MiB/s".to_string()));
@@ -226,7 +229,7 @@ mod tests {
     fn test_parse_progress_no_speed() {
         let line = "[download]  75.0% of 100.00MiB";
         let (progress, speed, eta) = DownloadQueue::parse_download_line(line);
-        
+
         assert_eq!(progress, Some(0.75));
         assert_eq!(speed, None);
         assert_eq!(eta, None);
@@ -236,7 +239,7 @@ mod tests {
     fn test_parse_non_download_line() {
         let line = "[info] Downloading video...";
         let (progress, speed, eta) = DownloadQueue::parse_download_line(line);
-        
+
         assert_eq!(progress, None);
         assert_eq!(speed, None);
         assert_eq!(eta, None);

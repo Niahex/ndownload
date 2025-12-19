@@ -1,3 +1,4 @@
+use crate::cache::Cache;
 use anyhow::Result;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
@@ -5,7 +6,6 @@ use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
 use std::time::Duration;
-use crate::cache::Cache;
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct VideoMetadata {
@@ -114,7 +114,11 @@ impl VideoScanner {
             return None;
         };
 
-        tracing::debug!("Recherche vidéo avec durée {} pour {}", target_duration, channel_name);
+        tracing::debug!(
+            "Recherche vidéo avec durée {} pour {}",
+            target_duration,
+            channel_name
+        );
 
         for storage_path in &self.storage_paths {
             let channel_path = format!("{}/{}", storage_path, channel_name);
@@ -142,7 +146,9 @@ impl VideoScanner {
                     } else {
                         if let Some(dur) = Self::get_video_duration(&path) {
                             // Mettre en cache
-                            self.file_durations_cache.lock().insert(path_str.clone(), dur);
+                            self.file_durations_cache
+                                .lock()
+                                .insert(path_str.clone(), dur);
                             dur
                         } else {
                             tracing::warn!("Impossible de lire la durée de: {}", path.display());
@@ -153,7 +159,11 @@ impl VideoScanner {
                     tracing::debug!("Fichier: {} - durée: {}", path.display(), local_duration);
                     // Tolérance de 5 secondes
                     if (local_duration - target_duration).abs() < 5.0 {
-                        tracing::info!("Match trouvé: {} (durée: {})", path.display(), local_duration);
+                        tracing::info!(
+                            "Match trouvé: {} (durée: {})",
+                            path.display(),
+                            local_duration
+                        );
                         return Some(path_str);
                     }
                 }

@@ -1,6 +1,6 @@
 use gpui::*;
 
-use super::super::{Channel, Platform, NORD6, NORD11, NORD15};
+use super::super::{Channel, Platform, NORD11, NORD15, NORD6};
 
 #[derive(IntoElement)]
 pub struct ChannelItem {
@@ -29,18 +29,13 @@ impl RenderOnce for ChannelItem {
             .items_center()
             .gap_3()
             .child(
-                div()
-                    .px_2()
-                    .py_1()
-                    .bg(platform_color)
-                    .rounded_sm()
-                    .child(
-                        div()
-                            .text_color(rgb(NORD6))
-                            .text_size(px(12.0))
-                            .font_weight(FontWeight::BOLD)
-                            .child(platform_name),
-                    ),
+                div().px_2().py_1().bg(platform_color).rounded_sm().child(
+                    div()
+                        .text_color(rgb(NORD6))
+                        .text_size(px(12.0))
+                        .font_weight(FontWeight::BOLD)
+                        .child(platform_name),
+                ),
             )
             .child(
                 div()

@@ -25,7 +25,7 @@ impl RenderOnce for ProgressBar {
                     .h_full()
                     .w(relative(self.progress))
                     .bg(rgb(0x88c0d0))
-                    .rounded(px(2.0))
+                    .rounded(px(2.0)),
             )
     }
 }

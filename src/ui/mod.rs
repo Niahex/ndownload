@@ -1,33 +1,30 @@
-use gpui::*;
-use gpui::prelude::FluentBuilder;
-use std::sync::Arc;
-use crate::scanner::VideoScanner;
 use crate::downloader_queue::DownloadQueue;
 use crate::notifications::Notification;
+use crate::scanner::VideoScanner;
+use gpui::prelude::FluentBuilder;
+use gpui::*;
 use serde::{Deserialize, Serialize};
+use std::sync::Arc;
 
 pub mod actions;
-mod text_input;
 mod components;
+mod text_input;
 
-use text_input::TextInputView;
-use components::{VideoItem, ChannelItem};
 pub use actions::*;
+use components::{ChannelItem, VideoItem};
+use text_input::TextInputView;
 
 // Palette Nord
-const NORD0: u32 = 0x2e3440;  // Polar Night - darkest
-const NORD1: u32 = 0x3b4252;  // Polar Night
-const NORD2: u32 = 0x434c5e;  // Polar Night
-const NORD3: u32 = 0x4c566a;  // Polar Night - lightest
-const NORD4: u32 = 0xd8dee9;  // Snow Storm - darkest
-const NORD5: u32 = 0xe5e9f0;  // Snow Storm
-const NORD6: u32 = 0xeceff4;  // Snow Storm - lightest
-const NORD7: u32 = 0x8fbcbb;  // Frost - cyan
-const NORD8: u32 = 0x88c0d0;  // Frost - bright cyan
-const NORD9: u32 = 0x81a1c1;  // Frost - blue
+const NORD0: u32 = 0x2e3440; // Polar Night - darkest
+const NORD1: u32 = 0x3b4252; // Polar Night
+const NORD2: u32 = 0x434c5e; // Polar Night
+const NORD3: u32 = 0x4c566a; // Polar Night - lightest
+const NORD4: u32 = 0xd8dee9; // Snow Storm - darkest
+const NORD6: u32 = 0xeceff4; // Snow Storm - lightest
+const NORD8: u32 = 0x88c0d0; // Frost - bright cyan
+const NORD9: u32 = 0x81a1c1; // Frost - blue
 const NORD10: u32 = 0x5e81ac; // Frost - dark blue
 const NORD11: u32 = 0xbf616a; // Aurora - red
-const NORD12: u32 = 0xd08770; // Aurora - orange
 const NORD13: u32 = 0xebcb8b; // Aurora - yellow
 const NORD14: u32 = 0xa3be8c; // Aurora - green
 const NORD15: u32 = 0xb48ead; // Aurora - purple
@@ -63,10 +60,8 @@ struct Channel {
 
 #[derive(Clone, Debug)]
 struct VideoInfo {
-    id: String,
     title: String,
     url: String,
-    upload_date: Option<String>,
     status: VideoStatus,
 }
 
@@ -121,18 +116,6 @@ impl Platform {
         }
 
         None
-    }
-}
-
-fn format_date(date_str: &str) -> String {
-    // Format YYYYMMDD -> DD/MM/YYYY
-    if date_str.len() == 8 {
-        let year = &date_str[0..4];
-        let month = &date_str[4..6];
-        let day = &date_str[6..8];
-        format!("{}/{}/{}", day, month, year)
-    } else {
-        date_str.to_string()
     }
 }
 
@@ -238,7 +221,9 @@ impl NDownloaderApp {
                         this.videos = metadata_videos
                             .into_iter()
                             .map(|meta| {
-                                let is_downloaded = scanner.is_video_downloaded(&channel_name, meta.duration).is_some();
+                                let is_downloaded = scanner
+                                    .is_video_downloaded(&channel_name, meta.duration)
+                                    .is_some();
                                 let is_downloading = this.downloading_videos.contains(&meta.url);
 
                                 let status = if is_downloaded {
@@ -250,10 +235,8 @@ impl NDownloaderApp {
                                 };
 
                                 VideoInfo {
-                                    id: meta.id,
                                     title: meta.title,
                                     url: meta.url,
-                                    upload_date: meta.upload_date,
                                     status,
                                 }
                             })
@@ -302,15 +285,18 @@ impl NDownloaderApp {
         cx.quit();
     }
 
-    fn handle_cancel_download(&mut self, _: &CancelDownload, _window: &mut Window, cx: &mut Context<Self>) {
+    fn handle_cancel_download(
+        &mut self,
+        _: &CancelDownload,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         self.cancel_download(cx);
     }
 
     fn start_download(&mut self, video_url: String, channel_name: String, cx: &mut Context<Self>) {
-        let input = cx.new(|cx| {
-            TextInputView::new(cx)
-                .placeholder("Nom du fichier (sans extension)...")
-        });
+        let input =
+            cx.new(|cx| TextInputView::new(cx).placeholder("Nom du fichier (sans extension)..."));
         self.download_input = Some(input);
         self.download_video = Some(DownloadingVideo {
             url: video_url,
@@ -374,7 +360,10 @@ impl NDownloaderApp {
         let filename_clone = filename.trim().to_string();
 
         // Notification de début
-        Notification::info("Téléchargement démarré", &format!("Téléchargement de {} en cours...", filename_clone));
+        Notification::info(
+            "Téléchargement démarré",
+            &format!("Téléchargement de {} en cours...", filename_clone),
+        );
 
         cx.spawn(async move |this, cx| {
             if let Err(error) = download_queue
@@ -387,7 +376,10 @@ impl NDownloaderApp {
                 .await
             {
                 tracing::error!("Failed to add download: {}", error);
-                Notification::error("Erreur de téléchargement", &format!("Impossible de démarrer le téléchargement: {}", error));
+                Notification::error(
+                    "Erreur de téléchargement",
+                    &format!("Impossible de démarrer le téléchargement: {}", error),
+                );
 
                 this.update(cx, |this, cx| {
                     this.downloading_videos.remove(&video_url);
@@ -398,14 +390,17 @@ impl NDownloaderApp {
                         }
                     }
                     cx.notify();
-                }).ok();
+                })
+                .ok();
                 return;
             }
 
             // Polling: attendre que le fichier existe vraiment
             let mut progress = 0.0;
             loop {
-                cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
+                cx.background_executor()
+                    .timer(std::time::Duration::from_secs(2))
+                    .await;
 
                 // Simuler la progression (incrémenter jusqu'à 90%)
                 if progress < 0.9 {
@@ -417,7 +412,8 @@ impl NDownloaderApp {
                                 cx.notify();
                             }
                         }
-                    }).ok();
+                    })
+                    .ok();
                 }
 
                 if output_path_buf.exists() {
@@ -429,9 +425,13 @@ impl NDownloaderApp {
                                 cx.notify();
                             }
                         }
-                    }).ok();
+                    })
+                    .ok();
 
-                    Notification::success("Téléchargement terminé", &format!("{} a été téléchargé avec succès", filename_clone));
+                    Notification::success(
+                        "Téléchargement terminé",
+                        &format!("{} a été téléchargé avec succès", filename_clone),
+                    );
 
                     this.update(cx, |this, cx| {
                         this.downloading_videos.remove(&video_url);
@@ -442,7 +442,8 @@ impl NDownloaderApp {
                             }
                         }
                         cx.notify();
-                    }).ok();
+                    })
+                    .ok();
                     break;
                 }
 
@@ -478,7 +479,6 @@ impl Render for NDownloaderApp {
 
 impl NDownloaderApp {
     fn render_channel_list(&mut self, cx: &mut Context<Self>) -> AnyElement {
-
         // Sinon, afficher la liste des chaînes
         div()
             .on_action(cx.listener(Self::go_back))
@@ -691,16 +691,19 @@ impl NDownloaderApp {
                             .rounded_md()
                             .cursor_pointer()
                             .hover(|style| style.bg(rgb(NORD3)))
-                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, window, cx| {
-                                this.go_back(&GoBack, window, cx);
-                                cx.notify();
-                            }))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _event, window, cx| {
+                                    this.go_back(&GoBack, window, cx);
+                                    cx.notify();
+                                }),
+                            )
                             .child(
                                 div()
                                     .text_color(rgb(NORD6))
                                     .text_size(px(14.0))
-                                    .child("← Retour")
-                            )
+                                    .child("← Retour"),
+                            ),
                     )
                     .child(
                         div()
@@ -708,30 +711,25 @@ impl NDownloaderApp {
                             .items_center()
                             .gap_3()
                             .child(
-                                div()
-                                    .px_2()
-                                    .py_1()
-                                    .bg(platform_color)
-                                    .rounded_sm()
-                                    .child(
-                                        div()
-                                            .text_color(rgb(NORD6))
-                                            .text_size(px(12.0))
-                                            .font_weight(FontWeight::BOLD)
-                                            .child(match channel.platform {
-                                                Platform::YouTube => "YouTube",
-                                                Platform::Twitch => "Twitch",
-                                            })
-                                    )
+                                div().px_2().py_1().bg(platform_color).rounded_sm().child(
+                                    div()
+                                        .text_color(rgb(NORD6))
+                                        .text_size(px(12.0))
+                                        .font_weight(FontWeight::BOLD)
+                                        .child(match channel.platform {
+                                            Platform::YouTube => "YouTube",
+                                            Platform::Twitch => "Twitch",
+                                        }),
+                                ),
                             )
                             .child(
                                 div()
                                     .text_color(rgb(NORD6))
                                     .text_size(px(20.0))
                                     .font_weight(FontWeight::BOLD)
-                                    .child(channel.name.clone())
-                            )
-                    )
+                                    .child(channel.name.clone()),
+                            ),
+                    ),
             )
             .child(
                 // Liste des vidéos
@@ -750,80 +748,90 @@ impl NDownloaderApp {
                             .text_size(px(16.0))
                             .font_weight(FontWeight::SEMIBOLD)
                             .mb_2()
-                            .child(format!("Vidéos disponibles ({})", self.videos.len()))
+                            .child(format!("Vidéos disponibles ({})", self.videos.len())),
                     )
-                    .child(
-                        if self.loading {
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .h_full()
-                                .text_color(rgb(NORD8))
-                                .text_size(px(14.0))
-                                .child("Chargement des vidéos...")
-                                .into_any_element()
-                        } else if self.videos.is_empty() {
-                            div()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .h_full()
-                                .text_color(rgb(NORD3))
-                                .text_size(px(14.0))
-                                .child("Aucune vidéo trouvée")
-                                .into_any_element()
-                        } else {
-                            div()
-                                .id("videos-list")
-                                .flex()
-                                .flex_col()
-                                .gap_2()
-                                .size_full()
-                                .overflow_y_scroll()
-                                .children(self.videos.iter().enumerate().map(|(_idx, video)| {
-                                    let video_url = video.url.clone();
-                                    let channel_name = self.channels[channel_index].name.clone();
-                                    let status = video.status.clone();
+                    .child(if self.loading {
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .h_full()
+                            .text_color(rgb(NORD8))
+                            .text_size(px(14.0))
+                            .child("Chargement des vidéos...")
+                            .into_any_element()
+                    } else if self.videos.is_empty() {
+                        div()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .h_full()
+                            .text_color(rgb(NORD3))
+                            .text_size(px(14.0))
+                            .child("Aucune vidéo trouvée")
+                            .into_any_element()
+                    } else {
+                        div()
+                            .id("videos-list")
+                            .flex()
+                            .flex_col()
+                            .gap_2()
+                            .size_full()
+                            .overflow_y_scroll()
+                            .children(self.videos.iter().enumerate().map(|(_idx, video)| {
+                                let video_url = video.url.clone();
+                                let channel_name = self.channels[channel_index].name.clone();
+                                let status = video.status.clone();
 
-                                    // Récupérer la progression si en cours de téléchargement
-                                    let progress = if status == VideoStatus::Downloading {
-                                        self.download_queue.get_tasks()
-                                            .iter()
-                                            .find(|t| t.video_url == video_url)
-                                            .map(|t| t.progress)
-                                    } else {
-                                        None
-                                    };
+                                // Récupérer la progression si en cours de téléchargement
+                                let progress = if status == VideoStatus::Downloading {
+                                    self.download_queue
+                                        .get_tasks()
+                                        .iter()
+                                        .find(|t| t.video_url == video_url)
+                                        .map(|t| t.progress)
+                                } else {
+                                    None
+                                };
 
-                                    let mut video_item = VideoItem::new(video.clone());
-                                    if let Some(p) = progress {
-                                        video_item = video_item.with_progress(p);
-                                    }
+                                let mut video_item = VideoItem::new(video.clone());
+                                if let Some(p) = progress {
+                                    video_item = video_item.with_progress(p);
+                                }
 
-                                    div()
-                                        .flex()
-                                        .items_center()
-                                        .gap_3()
-                                        .p_3()
-                                        .bg(rgb(NORD2))
-                                        .rounded_md()
-                                        .when(status == VideoStatus::NotDownloaded, |this| {
-                                            this.cursor_pointer()
-                                                .hover(|style| style.bg(rgb(NORD3)))
-                                                .on_mouse_down(MouseButton::Left, cx.listener(move |this, _event, _window, cx| {
-                                                    this.start_download(video_url.clone(), channel_name.clone(), cx);
-                                                }))
-                                        })
-                                        .child(video_item)
-                                }))
-                                .into_any_element()
-                        }
-                    )
+                                div()
+                                    .flex()
+                                    .items_center()
+                                    .gap_3()
+                                    .p_3()
+                                    .bg(rgb(NORD2))
+                                    .rounded_md()
+                                    .when(status == VideoStatus::NotDownloaded, |this| {
+                                        this.cursor_pointer()
+                                            .hover(|style| style.bg(rgb(NORD3)))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(move |this, _event, _window, cx| {
+                                                    this.start_download(
+                                                        video_url.clone(),
+                                                        channel_name.clone(),
+                                                        cx,
+                                                    );
+                                                }),
+                                            )
+                                    })
+                                    .child(video_item)
+                            }))
+                            .into_any_element()
+                    }),
             )
     }
 
-    fn render_download_overlay(&mut self, main_content: AnyElement, cx: &mut Context<Self>) -> AnyElement {
+    fn render_download_overlay(
+        &mut self,
+        main_content: AnyElement,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         div()
             .size_full()
             .relative()
@@ -839,9 +847,12 @@ impl NDownloaderApp {
                     .flex()
                     .items_center()
                     .justify_center()
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
-                        this.cancel_download(cx);
-                    }))
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _event, _window, cx| {
+                            this.cancel_download(cx);
+                        }),
+                    )
                     .child(
                         // Dialog box
                         div()
@@ -861,7 +872,7 @@ impl NDownloaderApp {
                                     .text_color(rgb(NORD6))
                                     .text_size(px(18.0))
                                     .font_weight(FontWeight::BOLD)
-                                    .child("Télécharger la vidéo")
+                                    .child("Télécharger la vidéo"),
                             )
                             .child(
                                 // Input
@@ -870,10 +881,9 @@ impl NDownloaderApp {
                                     .flex_col()
                                     .gap_2()
                                     .child(
-                                        div()
-                                            .text_color(rgb(NORD4))
-                                            .text_size(px(13.0))
-                                            .child("Entrez le nom du fichier (sans extension .mp4) :")
+                                        div().text_color(rgb(NORD4)).text_size(px(13.0)).child(
+                                            "Entrez le nom du fichier (sans extension .mp4) :",
+                                        ),
                                     )
                                     .child(
                                         div()
@@ -883,15 +893,17 @@ impl NDownloaderApp {
                                             .border_1()
                                             .border_color(rgb(NORD3))
                                             .rounded_md()
-                                            .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                                                if event.keystroke.key == "enter" {
-                                                    this.confirm_download(window, cx);
-                                                } else if event.keystroke.key == "escape" {
-                                                    this.cancel_download(cx);
-                                                }
-                                            }))
-                                            .child(self.download_input.clone().unwrap())
-                                    )
+                                            .on_key_down(cx.listener(
+                                                |this, event: &KeyDownEvent, window, cx| {
+                                                    if event.keystroke.key == "enter" {
+                                                        this.confirm_download(window, cx);
+                                                    } else if event.keystroke.key == "escape" {
+                                                        this.cancel_download(cx);
+                                                    }
+                                                },
+                                            ))
+                                            .child(self.download_input.clone().unwrap()),
+                                    ),
                             )
                             .when_some(self.download_video.as_ref(), |this, video| {
                                 this.child(
@@ -907,14 +919,17 @@ impl NDownloaderApp {
                                                     div()
                                                         .text_color(rgb(NORD4))
                                                         .text_size(px(13.0))
-                                                        .child(format!("Progression: {:.0}%", video.progress * 100.0))
+                                                        .child(format!(
+                                                            "Progression: {:.0}%",
+                                                            video.progress * 100.0
+                                                        )),
                                                 )
                                                 .when_some(video.speed.as_ref(), |this, speed| {
                                                     this.child(
                                                         div()
                                                             .text_color(rgb(NORD4))
                                                             .text_size(px(13.0))
-                                                            .child(format!("{}", speed))
+                                                            .child(format!("{}", speed)),
                                                     )
                                                 })
                                                 .when_some(video.eta.as_ref(), |this, eta| {
@@ -922,11 +937,11 @@ impl NDownloaderApp {
                                                         div()
                                                             .text_color(rgb(NORD4))
                                                             .text_size(px(13.0))
-                                                            .child(format!("ETA {}", eta))
+                                                            .child(format!("ETA {}", eta)),
                                                     )
-                                                })
+                                                }),
                                         )
-                                        .child(components::ProgressBar::new(video.progress))
+                                        .child(components::ProgressBar::new(video.progress)),
                                 )
                             })
                             .child(
@@ -944,15 +959,18 @@ impl NDownloaderApp {
                                             .rounded_md()
                                             .cursor_pointer()
                                             .hover(|style| style.bg(rgb(NORD3)))
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
-                                                this.cancel_download(cx);
-                                            }))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event, _window, cx| {
+                                                    this.cancel_download(cx);
+                                                }),
+                                            )
                                             .child(
                                                 div()
                                                     .text_color(rgb(NORD6))
                                                     .text_size(px(14.0))
-                                                    .child("Annuler")
-                                            )
+                                                    .child("Annuler"),
+                                            ),
                                     )
                                     .child(
                                         // Bouton Télécharger
@@ -963,19 +981,22 @@ impl NDownloaderApp {
                                             .rounded_md()
                                             .cursor_pointer()
                                             .hover(|style| style.bg(rgb(NORD10)))
-                                            .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, window, cx| {
-                                                this.confirm_download(window, cx);
-                                            }))
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event, window, cx| {
+                                                    this.confirm_download(window, cx);
+                                                }),
+                                            )
                                             .child(
                                                 div()
                                                     .text_color(rgb(NORD6))
                                                     .text_size(px(14.0))
                                                     .font_weight(FontWeight::SEMIBOLD)
-                                                    .child("Télécharger")
-                                            )
-                                    )
-                            )
-                    )
+                                                    .child("Télécharger"),
+                                            ),
+                                    ),
+                            ),
+                    ),
             )
             .into_any_element()
     }

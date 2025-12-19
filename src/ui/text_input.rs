@@ -17,25 +17,12 @@ impl TextInput {
         }
     }
 
-    pub fn placeholder(mut self, text: impl Into<SharedString>) -> Self {
-        self.placeholder = text.into();
-        self
-    }
-
     pub fn value(&self) -> String {
         self.value.to_string()
     }
 
-    pub fn set_value(&mut self, value: impl Into<SharedString>) {
-        self.value = value.into();
-    }
-
     pub fn clear(&mut self) {
         self.value = "".into();
-    }
-
-    pub fn is_empty(&self) -> bool {
-        self.value.is_empty()
     }
 
     pub fn on_enter<F>(mut self, callback: F) -> Self
@@ -79,10 +66,6 @@ impl TextInputView {
 
     pub fn value(&self) -> String {
         self.input.value()
-    }
-
-    pub fn set_value(&mut self, value: impl Into<SharedString>) {
-        self.input.set_value(value);
     }
 
     pub fn clear(&mut self) {
@@ -150,17 +133,18 @@ impl Render for TextInputView {
             .w_full()
             .h_full()
             .px_3()
-            .child(
-                if self.input.value.is_empty() {
-                    div()
-                        .text_color(rgb(0x888888))
-                        .child(self.input.placeholder.clone())
-                } else {
-                    div()
-                        .text_color(if focused { rgb(0xffffff) } else { rgb(0xcccccc) })
-                        .child(self.input.value.clone())
-                }
-            )
+            .child(if self.input.value.is_empty() {
+                div()
+                    .text_color(rgb(0x888888))
+                    .child(self.input.placeholder.clone())
+            } else {
+                div()
+                    .text_color(if focused {
+                        rgb(0xffffff)
+                    } else {
+                        rgb(0xcccccc)
+                    })
+                    .child(self.input.value.clone())
+            })
     }
 }
-
