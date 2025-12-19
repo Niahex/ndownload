@@ -33,21 +33,11 @@ thiserror = "2.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# CLI
-clap = { version = "4.5", features = ["derive"] }
-
 # Date/time
 chrono = "0.4"
 
-# Configuration
-toml = "0.8"
-
-# File system operations
-walkdir = "2.5"
-
 # Utilities
 parking_lot = "0.12"
-once_cell = "1.19"
 smol = "2.0.2"
 
 [dev-dependencies]
