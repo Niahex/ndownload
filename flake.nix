@@ -100,7 +100,6 @@
           env = envVars;
           pname = "ndownloader";
           version = "0.1.0";
-          cargoExtraArgs = "--release";
 
           postInstall = ''
             mkdir -p $out/share/applications $out/share/icons/hicolor/scalable/apps
