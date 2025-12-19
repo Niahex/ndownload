@@ -71,11 +71,13 @@
 
         # Dependencies needed only at runtime
         runtimeDependencies = with pkgs; [
+          wayland
           vulkan-loader
           mesa
+          libxkbcommon
           yt-dlp
           ffmpeg
-          libnotify # Pour les notifications système
+          libnotify
         ];
 
         nativeBuildInputs = with pkgs; [
@@ -102,6 +104,9 @@
           version = "0.1.0";
 
           postInstall = ''
+            wrapProgram $out/bin/ndownloader \
+              --prefix LD_LIBRARY_PATH : ${pkgs.lib.makeLibraryPath runtimeDependencies}
+            
             mkdir -p $out/share/applications $out/share/icons/hicolor/scalable/apps
             cp ${./assets/ndownloader.svg} $out/share/icons/hicolor/scalable/apps/ndownloader.svg
             cat > $out/share/applications/ndownloader.desktop << EOF
