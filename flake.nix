@@ -65,7 +65,6 @@
           alsa-lib
           udev
           # Additional dependencies for ndownloader
-          sqlite
           yt-dlp
           ffmpeg
         ];
@@ -158,7 +157,7 @@
             echo "ffmpeg: $(ffmpeg -version | head -1)"
             echo "Vulkan ICD: $VK_ICD_FILENAMES"
             echo "Available Vulkan devices:"
-            vulkaninfo --summary 2>/dev/null | grep -A 2 "GPU" || echo "  Run 'vulkaninfo' for details"
+            vulkaninfo --summary 2>/dev/null | grep -A 2 "GPU" | grep -v "WARNING" || echo "  Run 'vulkaninfo' for details"
           '';
         };
 
