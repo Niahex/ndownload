@@ -929,7 +929,7 @@ impl NDownloaderApp {
                                                         div()
                                                             .text_color(rgb(NORD4))
                                                             .text_size(px(13.0))
-                                                            .child(format!("{}", speed)),
+                                                            .child(speed.to_string()),
                                                     )
                                                 })
                                                 .when_some(video.eta.as_ref(), |this, eta| {
@@ -937,7 +937,7 @@ impl NDownloaderApp {
                                                         div()
                                                             .text_color(rgb(NORD4))
                                                             .text_size(px(13.0))
-                                                            .child(format!("ETA {}", eta)),
+                                                            .child(format!("ETA {eta}")),
                                                     )
                                                 }),
                                         )
